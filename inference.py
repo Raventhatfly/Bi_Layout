@@ -25,7 +25,6 @@ from utils.conversion import depth2xyz
 from utils.logger import get_logger
 from utils.misc import tensor2np_d, tensor2np
 from evaluation.accuracy import show_grad
-from models.lgt_net import LGT_Net
 from utils.writer import xyz2json
 from visualization.boundary import draw_boundaries
 from visualization.floorplan import draw_floorplan, draw_iou_floorplan
@@ -160,11 +159,21 @@ def show_alpha_floorplan(dt_xyz, side_l=512, border_color=None):
     return dt_floorplan
 
 
+def _np_json_default(o):
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    raise TypeError(f'Object of type {o.__class__.__name__} is not JSON serializable')
+
+
 def save_pred_json(xyz, ration, save_path):
     # xyz[..., -1] = -xyz[..., -1]
     json_data = xyz2json(xyz, ration)
     with open(save_path, 'w') as f:
-        f.write(json.dumps(json_data, indent=4) + '\n')
+        f.write(json.dumps(json_data, indent=4, default=_np_json_default) + '\n')
     return json_data
 
 
@@ -181,9 +190,18 @@ def inference():
         name = os.path.basename(img_path).split('.')[0]
         bar.set_description(name)
         img = np.array(Image.open(img_path).resize((1024, 512), Image.Resampling.BICUBIC))[..., :3]
+        vp_cache_path = os.path.join(args.output_dir, f"{name}_vp.txt")
         if args.post_processing is not None and 'manhattan' in args.post_processing:
             bar.set_description("Preprocessing")
-            img, vp = preprocess(img, vp_cache_path=os.path.join(args.output_dir, f"{name}_vp.txt"))
+            img, vp = preprocess(img, vp_cache_path=vp_cache_path)
+        elif not os.path.exists(vp_cache_path):
+            # atalanta / original: no VP rotation, but still write a canonical
+            # identity vp.txt so panoroom_edit's yaw extractor returns the
+            # -90° offset needed to align pano with the layout json.
+            with open(vp_cache_path, 'w') as f:
+                f.write('0.000000 0.000000 1.000000\n')
+                f.write('0.000000 1.000000 0.000000\n')
+                f.write('1.000000 0.000000 0.000000\n')
 
         img = (img / 255.0).astype(np.float32)
         run_one_inference(img, model, args, name, logger)
